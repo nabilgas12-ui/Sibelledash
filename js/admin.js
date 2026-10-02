@@ -2571,7 +2571,7 @@ async function renderSettings() {
           <button class="btn btn-ghost" onclick="resetDemoOrders()">${t('resetDemo')}</button>
           <button class="btn btn-danger" onclick="clearOrders()">${t('clearOrders')}</button>
           <button class="btn btn-ghost" onclick="resetProducts()">${t('resetProducts')}</button>
-          <a href="../index.html" target="_blank" class="btn btn-primary">${t('store')} ↗</a>
+          <a href="${window.SI_BELLE_STORE_URL || '../index.html'}" target="_blank" class="btn btn-primary">${t('store')} ↗</a>
         </div>
       </div>
     </div>`;
