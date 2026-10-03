@@ -369,10 +369,6 @@ async function onAdminProductChange(payload) {
   const prev = _cache.products.find(p => String(p.id) === String(nw.id));
   let merged = Object.assign({}, prev && prev._raw ? prev._raw : {}, nw);
   if (!prev || merged.name_ar === undefined) { const full = await _adminFetchRow('products', nw.id); if (full) merged = full; }
-  if (merged.active === false) {
-    _cache.products = _cache.products.filter(p => String(p.id) !== String(nw.id));
-    return _adminRefresh();
-  }
   const mapped = mapAdminProduct(merged);
   if (prev) _cache.products = _cache.products.map(p => p === prev ? mapped : p);
   else _cache.products.push(mapped);
@@ -579,7 +575,7 @@ function mapAdminProduct(row) {
     image: main,
     images: allImages,
     stock: Number(row.stock) || 0,
-    active: true,
+    active: row.active !== false,
     sku: row.sku,
     colors: Array.isArray(row.colors) ? row.colors : [],
     sizes: Array.isArray(row.sizes) ? row.sizes : [],
@@ -603,7 +599,7 @@ async function getProducts(force) {
   if (!sb) return DEFAULT_PRODUCTS.slice();
   const { data, error } = await sb.from('products').select('*').order('sort_order').order('id');
   if (error) { console.error(error); return []; }
-  _cache.products = (data || []).filter(row => row.active !== false).map(mapAdminProduct);
+  _cache.products = (data || []).map(mapAdminProduct);   // النشط والمعطّل معاً
   return _cache.products;
 }
 async function saveProducts() { /* no-op */ }
@@ -1645,16 +1641,18 @@ function renderProducts() {
       </div>
       <div class="panel-body">
         ${products.length ? `<div class="prod-grid">${products.map(p => `
-          <div class="prod-card">
+          <div class="prod-card" style="${p.active === false ? 'opacity:0.7;border:1px dashed #c9a227' : ''}">
             <img src="${p.image || 'images/p1.png'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22150%22><rect fill=%22%23F5EDE6%22 width=%22200%22 height=%22150%22/></svg>'">
             <div class="prod-card-body">
-              <h4>${p.name?.ar || '—'}</h4>
+              <h4>${p.name?.ar || '—'} ${p.active === false ? `<span style="font-size:0.7rem;background:#f5e6c8;color:#8a6d1d;padding:2px 8px;border-radius:999px;margin-inline-start:6px">${adminLang==='ar'?'معطّل':'Désactivé'}</span>` : ''}</h4>
               <div style="font-size:0.8rem;color:var(--brown-light);margin-bottom:4px">${p.name?.fr || ''}</div>
               <div class="price">${Number(p.price).toLocaleString()} ${t('currency')}</div>
               <div style="font-size:0.78rem;color:var(--brown-light);margin-top:4px">${t('stock')}: ${p.stock ?? '—'}</div>
               <div class="actions" style="flex-wrap:wrap;gap:6px">
                 <button class="btn btn-ghost btn-sm" onclick="openProductForm(${p.id})">${t('edit')}</button>
-                <button class="btn btn-ghost btn-sm" onclick="disableProduct(${p.id})" title="تعطيل">${adminLang==='ar'?'تعطيل':'Désactiver'}</button>
+                ${p.active === false
+                  ? `<button class="btn btn-primary btn-sm" onclick="enableProduct(${p.id})">${adminLang==='ar'?'تفعيل':'Activer'}</button>`
+                  : `<button class="btn btn-ghost btn-sm" onclick="disableProduct(${p.id})">${adminLang==='ar'?'تعطيل':'Désactiver'}</button>`}
                 <button class="btn btn-danger btn-sm" onclick="hardDeleteProduct(${p.id})" title="حذف نهائي">${adminLang==='ar'?'حذف نهائي':'Supprimer'}</button>
               </div>
             </div>
@@ -1920,9 +1918,9 @@ async function saveProduct(id) {
     colors: colors,
     sizes: sizes,
     images: imgs,
-    image_url: imgs[0] || null,
-    active: true
+    image_url: imgs[0] || null
   };
+  if (!id) payload.active = true;   // منتج جديد = مفعّل؛ التعديل يحافظ على الحالة الحالية
   try {
     const sb = SiBelleSB.getSupabase();
     if (id) {
@@ -1985,21 +1983,28 @@ async function optimizeExistingImages() {
 }
 
 /** تعطيل المنتج (يختفي من الموقع ويبقى في القاعدة) */
-async function disableProduct(id) {
-  if (!confirm(adminLang === 'ar' ? 'تعطيل هذا المنتج؟' : 'Désactiver ce produit ?')) return;
+async function setProductActive(id, active) {
+  const list = _cache.products || [];
+  const p = list.find(x => String(x.id) === String(id));
+  const prev = p ? p.active : undefined;
+  if (p) { p.active = active; if (p._raw) p._raw.active = active; renderPage(); }   // فوري
   try {
     const sb = SiBelleSB.getSupabase();
-    const { error } = await sb.from('products').update({ active: false }).eq('id', id);
+    const { data, error } = await sb.from('products').update({ active: active }).eq('id', id).select('id');
     if (error) throw error;
-    _cache.products = null;
-    await getProducts(true);
-    toast(adminLang === 'ar' ? 'تم التعطيل' : 'Désactivé');
-    renderPage();
+    if (!data || !data.length) throw new Error(adminLang === 'ar' ? 'لم يُحفظ التغيير (لا صلاحية)' : 'Modification non enregistrée (permission)');
+    toast(active ? (adminLang === 'ar' ? 'تم التفعيل ✅' : 'Activé ✅') : (adminLang === 'ar' ? 'تم التعطيل' : 'Désactivé'));
   } catch (e) {
     console.error(e);
-    toast(e.message || 'Error');
+    if (p) { p.active = prev; if (p._raw) p._raw.active = prev; renderPage(); }
+    toast((e && e.message) || 'Error');
   }
 }
+async function disableProduct(id) {
+  if (!confirm(adminLang === 'ar' ? 'تعطيل هذا المنتج؟ سيختفي من المتجر ويبقى هنا لتفعّله متى شئت.' : 'Désactiver ce produit ? Il disparaît de la boutique mais reste ici.')) return;
+  return setProductActive(id, false);
+}
+async function enableProduct(id) { return setProductActive(id, true); }
 
 /** حذف نهائي من القاعدة */
 async function hardDeleteProduct(id) {
@@ -2901,7 +2906,7 @@ function renderAnalytics() {
   const orders = _cache.orders || [];
   const delivered = orders.filter(o => o.status === 'delivered').length;
   const conv = orders.length ? (delivered / orders.length) * 100 : 0;
-  const lowStock = (_cache.products || []).filter(p => (p.stock || 0) < 10);
+  const lowStock = (_cache.products || []).filter(p => p.active !== false && (p.stock || 0) < 10);
 
   return `
     <div class="charts-row">
@@ -2917,7 +2922,7 @@ function renderAnalytics() {
       </div>
       <div class="chart-card">
         <h4>${t('lowStock')}</h4>
-        ${ringSVG((_cache.products || []).length ? (lowStock.length/(_cache.products || []).length)*100 : 0, 'blue')}
+        ${ringSVG((_cache.products || []).filter(p => p.active !== false).length ? (lowStock.length/(_cache.products || []).filter(p => p.active !== false).length)*100 : 0, 'blue')}
         <div style="font-size:0.85rem;color:var(--brown-light)">${lowStock.length} ${t('products')}</div>
       </div>
     </div>
@@ -3593,6 +3598,8 @@ window.updateTotalStockFromMatrix = updateTotalStockFromMatrix;
 window.saveProduct = saveProduct;
 window.deleteProduct = deleteProduct;
 window.disableProduct = disableProduct;
+window.enableProduct = enableProduct;
+window.setProductActive = setProductActive;
 window.hardDeleteProduct = hardDeleteProduct;
 window.disableCat = disableCat;
 window.hardDeleteCat = hardDeleteCat;
