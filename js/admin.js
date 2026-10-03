@@ -720,6 +720,11 @@ function seedDemoOrders() {
   saveOrders(demo);
 }
 
+/** Dashboard only: an order is "open" until it is shipped (shipped/delivered/cancelled/returned leave the dashboard counts & list) */
+function isOpenOrder(o) {
+  return !['shipped', 'delivered', 'cancelled', 'returned'].includes(o.status);
+}
+
 function newOrdersCount() {
   return (_cache.orders || []).filter(o => o.status === 'confirmed' || o.status === 'pending').length;
 }
@@ -943,9 +948,8 @@ function showPage(page) {
 function updateNavBadge() {
   const badge = document.getElementById('ordersBadge');
   if (!badge) return;
-  // Show total orders count (more visible); fall back to new if empty list loading
-  const total = (_cache.orders || []).length;
-  const n = total > 0 ? total : newOrdersCount();
+  // Open orders only: shipped / delivered / cancelled orders are not counted
+  const n = (_cache.orders || []).filter(isOpenOrder).length;
   badge.textContent = n > 0 ? String(n) : '';
   badge.style.display = n > 0 ? 'flex' : 'none';
   badge.style.background = '#e74c3c';
@@ -1006,6 +1010,7 @@ function getLast7DaysBuckets() {
     });
   }
   (_cache.orders || []).forEach(o => {
+    if (!isOpenOrder(o)) return;
     const od = new Date(o.date);
     od.setHours(0, 0, 0, 0);
     const bucket = days.find(d => d.date.getTime() === od.getTime());
@@ -1036,11 +1041,12 @@ function renderDashboard() {
   const delivered = orders.filter(o => o.status === 'delivered').length;
   const newO = newOrdersCount();
   const today = new Date().toDateString();
-  const todayCount = orders.filter(o => new Date(o.date).toDateString() === today).length;
+  const openOrders = orders.filter(isOpenOrder);
+  const todayCount = openOrders.filter(o => new Date(o.date).toDateString() === today).length;
   const todayRevenue = orders.filter(o => new Date(o.date).toDateString() === today && o.status !== 'cancelled')
     .reduce((s, o) => s + (o.totalNum || 0), 0);
   const avg = activeOrders.length ? Math.round(revenue / activeOrders.length) : 0;
-  const recent = [...orders].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
+  const recent = [...openOrders].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
   const conv = orders.length ? (delivered / orders.length) * 100 : 0;
   const days = getLast7DaysBuckets();
   const maxDayCount = Math.max(1, ...days.map(d => d.count));
@@ -1059,7 +1065,7 @@ function renderDashboard() {
       </div>
       <div class="hero-stats">
         <div class="hs-item"><strong>${revenue.toLocaleString()}</strong><span>${t('revenue')} ${t('currency')}</span></div>
-        <div class="hs-item"><strong>${orders.length}</strong><span>${t('totalOrders')}</span></div>
+        <div class="hs-item"><strong>${openOrders.length}</strong><span>${t('totalOrders')}</span></div>
         <div class="hs-item"><strong>${avg.toLocaleString()}</strong><span>${t('avgOrder')}</span></div>
         <div class="hs-item hs-today"><strong>${todayCount}</strong><span>${t('todayOrders')}</span></div>
       </div>
@@ -1098,7 +1104,7 @@ function renderDashboard() {
           <span class="ctrl-hint">${adminLang === 'ar' ? 'مخزون ≤ 10' : 'Stock ≤ 10'}</span>
         </button>
         <button type="button" class="ctrl-btn ctrl-neutral" onclick="showPage('orders')">
-          <span class="ctrl-num">${orders.length}</span>
+          <span class="ctrl-num">${openOrders.length}</span>
           <span class="ctrl-label">${t('allOrders')}</span>
           <span class="ctrl-hint">${t('viewAll')}</span>
         </button>
@@ -1137,7 +1143,7 @@ function renderDashboard() {
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a1a1a" stroke-width="1.8"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/></svg>
         </div>
         <div class="stat-label">${t('totalOrders')}</div>
-        <div class="stat-value">${orders.length}</div>
+        <div class="stat-value">${openOrders.length}</div>
         <div class="stat-sub">${pending} ${t('pending')}</div>
       </div>
       <div class="stat-card green">
@@ -2832,7 +2838,7 @@ function ringSVG(pct, colorClass) {
 /* ===== ANALYTICS ===== */
 
 function buildOrdersLineChart() {
-  const orders = (_cache.orders || []).filter(o => o.status !== 'cancelled');
+  const orders = (_cache.orders || []).filter(isOpenOrder);
   // Last 7 days buckets
   const days = [];
   const now = new Date();
@@ -3210,7 +3216,8 @@ async function renderPayments() {
           enabled: r.enabled !== false,
           name: { ar: r.name_ar, fr: r.name_fr },
           desc: { ar: r.description_ar || '', fr: r.description_fr || '' },
-          details: r.details || ''
+          details: r.details || '',
+          sort_order: r.sort_order
         }));
         saveSettings(s);
       }
@@ -3296,9 +3303,11 @@ async function savePaymentForm(idx) {
   };
   if (idx === null || idx === 'null') {
     if (list.some(p => p.id === id)) { toast(adminLang === 'ar' ? 'المعرّف موجود مسبقاً' : 'ID déjà utilisé'); return; }
+    data.sort_order = list.length;
     list.push(data);
   } else {
     data.enabled = list[idx].enabled !== false;
+    data.sort_order = list[idx].sort_order;
     list[idx] = data;
   }
   s.payments = list;
@@ -3433,14 +3442,49 @@ function renderInvoice() {
     </div>`;
 }
 
-function toggleInvoiceField(key) {
+function invoiceToDBPayload(inv) {
+  inv = inv || {};
+  return {
+    enabled: inv.enabled !== false,
+    show_on_success: inv.showOnSuccess !== false,
+    show_logo: inv.showLogo !== false,
+    show_qr: inv.showQr !== false,
+    show_customer: inv.showCustomer !== false,
+    show_address: inv.showAddress !== false,
+    show_payment: inv.showPayment !== false,
+    show_items: inv.showItems !== false,
+    show_shipping: inv.showShipping !== false,
+    show_discount: inv.showDiscount !== false,
+    show_total: inv.showTotal !== false,
+    auto_number_prefix: inv.prefix || 'SB-',
+    color: inv.color || '#C9A227',
+    title_ar: inv.title?.ar || 'فاتورة',
+    title_fr: inv.title?.fr || 'Facture',
+    company_name: inv.companyName || 'Si Belle',
+    company_subtitle_ar: inv.companySubtitle?.ar || '',
+    company_subtitle_fr: inv.companySubtitle?.fr || '',
+    footer_ar: inv.footer?.ar || '',
+    footer_fr: inv.footer?.fr || '',
+    note_ar: inv.note?.ar || '',
+    note_fr: inv.note?.fr || ''
+  };
+}
+
+async function toggleInvoiceField(key) {
   const s = getSettings();
   const inv = getInvoiceConfig();
   inv[key] = !inv[key];
   s.invoice = inv;
   saveSettings(s);
-  toast(t('saved'));
   renderPage();
+  // المزامنة مع قاعدة البيانات حتى يراها الزبائن على أجهزتهم
+  try {
+    await SiBelleSB.upsertInvoiceSettings(invoiceToDBPayload(inv));
+    toast(t('saved'));
+  } catch (e) {
+    console.error(e);
+    toast((adminLang === 'ar' ? 'تعذّر الحفظ في القاعدة: ' : 'Échec sauvegarde DB: ') + (e.message || ''));
+  }
 }
 
 async function saveInvoiceDesign() {
@@ -3456,31 +3500,7 @@ async function saveInvoiceDesign() {
   s.invoice = inv;
   saveSettings(s);
   try {
-    const inv = s.invoice || {};
-    await SiBelleSB.upsertInvoiceSettings({
-      enabled: inv.enabled !== false,
-      show_on_success: inv.showOnSuccess !== false,
-      show_logo: inv.showLogo !== false,
-      show_qr: inv.showQr !== false,
-      show_customer: inv.showCustomer !== false,
-      show_address: inv.showAddress !== false,
-      show_payment: inv.showPayment !== false,
-      show_items: inv.showItems !== false,
-      show_shipping: inv.showShipping !== false,
-      show_discount: inv.showDiscount !== false,
-      show_total: inv.showTotal !== false,
-      auto_number_prefix: inv.prefix || 'SB-',
-      color: inv.color || '#C9A227',
-      title_ar: inv.title?.ar || 'فاتورة',
-      title_fr: inv.title?.fr || 'Facture',
-      company_name: inv.companyName || 'Si Belle',
-      company_subtitle_ar: inv.companySubtitle?.ar || '',
-      company_subtitle_fr: inv.companySubtitle?.fr || '',
-      footer_ar: inv.footer?.ar || '',
-      footer_fr: inv.footer?.fr || '',
-      note_ar: inv.note?.ar || '',
-      note_fr: inv.note?.fr || ''
-    });
+    await SiBelleSB.upsertInvoiceSettings(invoiceToDBPayload(s.invoice));
     toast(t('saved'));
   } catch (e) {
     console.error(e);
