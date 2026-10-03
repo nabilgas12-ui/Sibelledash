@@ -653,10 +653,14 @@ async function hydrateContentFromDB() {
       if (site.featured_title_ar || site.featured_title_fr) c.featuredTitle = { ar: site.featured_title_ar || '', fr: site.featured_title_fr || '' };
       if (site.footer_description_ar || site.footer_description_fr) c.footerDesc = { ar: site.footer_description_ar || '', fr: site.footer_description_fr || '' };
     }
-    if (ann) {
-      c.topBanner = { ar: ann.text_ar || '', fr: ann.text_fr || '' };
+    if (ann !== undefined) {           // undefined = خطأ اتصال → لا نغيّر شيئاً
       const s = getSettings();
-      s.bannerEnabled = ann.enabled !== false;
+      if (ann) {
+        c.topBanner = { ar: (ann.text_ar || '').trim(), fr: (ann.text_fr || '').trim() };
+        s.bannerEnabled = ann.enabled !== false;
+      } else {
+        s.bannerEnabled = false;       // لا يوجد صف = لا شريط
+      }
       saveSettings(s);
     }
     saveContent(c);
@@ -2214,8 +2218,7 @@ async function saveAllContent() {
       footer_description_fr: content.footerDesc?.fr || ''
     });
     if (content.topBanner) {
-      const s = getSettings();
-      await SiBelleSB.saveAnnouncement(content.topBanner.ar, content.topBanner.fr, s.bannerEnabled !== false);
+      await SiBelleSB.saveAnnouncement(content.topBanner.ar, content.topBanner.fr, undefined);
     }
     toast(t('saved'));
   } catch (e) {
@@ -2582,10 +2585,13 @@ async function toggleBanner() {
   s.bannerEnabled = !s.bannerEnabled;
   saveSettings(s);
   try {
-    const c = getContent();
-    await SiBelleSB.saveAnnouncement(c.topBanner?.ar || ' ', c.topBanner?.fr || ' ', s.bannerEnabled);
+    await SiBelleSB.saveAnnouncement(undefined, undefined, s.bannerEnabled);   // يغيّر الحالة فقط ولا يلمس النصوص
     toast(t('saved'));
-  } catch (e) { console.error(e); toast(e.message || 'Error'); }
+  } catch (e) {
+    console.error(e);
+    s.bannerEnabled = !s.bannerEnabled; saveSettings(s);   // تراجع عن التبديل المحلي عند الفشل
+    toast(e.message || 'Error');
+  }
   renderPage();
 }
 async function saveBannerTexts() {
@@ -2597,7 +2603,7 @@ async function saveBannerTexts() {
   saveContent(content);
   try {
     const s = getSettings();
-    await SiBelleSB.saveAnnouncement(content.topBanner.ar, content.topBanner.fr, s.bannerEnabled !== false);
+    await SiBelleSB.saveAnnouncement(content.topBanner.ar, content.topBanner.fr, undefined);
     toast(t('saved'));
   } catch (e) { console.error(e); toast(e.message || 'Error'); }
 }
